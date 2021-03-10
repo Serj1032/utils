@@ -93,7 +93,7 @@ def GetChipId(devPath : str):
             chipid = "0x" + res.group(1)
 
     if chipid != None:
-        log.info("{0}: chipid = {1}".format(devPath, chipid))
+        log.info("[{0}]: chipID : {1}".format(devPath, chipid))
 
     return chipid
 
@@ -149,13 +149,14 @@ class Logger:
         """
 
         logName = "{0}".format(chipID)
-
-        fileHandlerDevice = logging.FileHandler(self.devicesLogDir + "/chipid_{0}.log".format(logName))
-        fileHandlerDevice.setFormatter(self.formatter)
-
         logDevice = logging.getLogger(logName)
-        logDevice.setLevel(logging.INFO)
-        logDevice.addHandler(fileHandlerDevice)
+
+        if not logDevice.hasHandlers():
+            fileHandlerDevice = logging.FileHandler(self.devicesLogDir + "/chipid_{0}.log".format(logName))
+            fileHandlerDevice.setFormatter(self.formatter)
+
+            logDevice.setLevel(logging.INFO)
+            logDevice.addHandler(fileHandlerDevice)
 
         return logDevice
 
@@ -171,46 +172,24 @@ class Device:
 
         self.waitReconnect = False
 
-    def WaitReconnect(self):
+    def WaitReconnect(self, timeout : int = 10):
         self.generalLog.info("{0} Wait reconnect...".format(self.GetDesciption()))
         with self.devLock:
             self.devPath = None
             self.waitReconnect = True
 
-        timeout = 10
         while self.waitReconnect and timeout > 0:
             timeout -= 1
             time.sleep(1)
             
         if timeout == 0:
-            raise RuntimeError("Device didn't reconnected!")
+            raise RuntimeError("Device with chip ID {0} didn't reconnected!".format(self.GetDesciption()))
 
     def DetectReconnect(self, newDevPath):
-        self.generalLog.info("Detected reconnect device. New devPath: " + newDevPath)
+        self.generalLog.info("{0} Reconnected: new devPath: {1}".format(self.GetDesciption(), newDevPath))
         with self.devLock:
             self.devPath = newDevPath
             self.waitReconnect = False
-
-    # def GetChipId(self):
-    #     """ Request ChipID of the device """
-    #     self.generalLog.info("{0}: Read chipID".format(self.GetDesciption()))
-    #     retcode, out, err = self.RunUpdate("chipid")
-    #     if "ChipID is:" in out:
-    #         res = re.search(r'ChipID is:(\w+)', out)
-    #         if res:
-    #             self.chipId = res.group(1)
-    #             self.generalLog.info("{0}: chipid = {1}".format(self.GetDesciption(), self.chipId))
-    #             return self.chipId
-
-    #     elif "romStage not bl1/bl2" in out:
-    #         retcode, out, err = self.RunUpdateAssert("bulkcmd", ["get_chipid"])
-    #         res = re.search(r'bulkInReply success:(\w+)', out)
-    #         if res:
-    #             self.chipId = "0x" + res.group(1)
-    #             self.generalLog.info("{0}: chipid = {1}".format(self.GetDesciption(), self.chipId))
-    #             return self.chipId
-
-    #     raise RuntimeError("Can't get [{0}] chipid".format(self.devPath))
 
     def Identify(self, idx):
         retcode, out, err = self.RunUpdateReturn("identify", ["7"])
@@ -222,10 +201,11 @@ class Device:
         raise RuntimeError("Can't identify device!")
 
     def GetDesciption(self):
-        if self.chipId:
-            return "[{0} ChipID:{1}]".format(self.devPath, self.chipId)
-        else:
-            return "[{0}]".format(self.devPath)
+        desc = "[" 
+        if self.devPath:
+            desc += self.devPath + " "
+        desc += self.chipId + "]"
+        return desc
 
     def RunUpdateReturn(self, cmd, args=[]):
         # Kind of magic
@@ -236,18 +216,14 @@ class Device:
         execCmd = [cmd, "path-" + self.devPath] + args
         retcode, out, err = exec_update(execCmd)
 
-        logger = self.generalLog
-        if self.deviceLog != None:
-            logger = self.deviceLog
-
         # Logging command in logfile
-        logger.info("Command: {0}".format(' '.join(execCmd)))
-        logger.info(10 * "-" + " Response " + 10 * "-")
+        self.deviceLog.info("Command: {0}".format(' '.join(execCmd)))
+        self.deviceLog.info(10 * "-" + " Response " + 10 * "-")
         if out != "":
-            logger.info("\n" + out)
+            self.deviceLog.info("\n" + out)
         if err != "":
-            logger.error("\n" + err)
-        logger.info(30 * "-")
+            self.deviceLog.error("\n" + err)
+        self.deviceLog.info(30 * "-")
 
         return retcode, out, err
 
@@ -346,7 +322,7 @@ class Image:
         # self.imageConfig = None
         self.platformConfig = None
 
-        self.generalLog.info("Start unpacking image {0}".format(imgPath))
+        self.generalLog.info("Unpacking image '{0}' ...".format(imgPath))
 
         # Create temp dir for unpack image
         self.tmpdir = "/tmp/aml_image_unpack_xxx"
@@ -355,7 +331,7 @@ class Image:
         os.mkdir(self.tmpdir)
 
         # Unpacking image
-        self.generalLog.info("Unpack image {0} to {1}".format(imgPath, self.tmpdir))
+        self.generalLog.info("Extract image '{0}' to '{1}'".format(imgPath, self.tmpdir))
         retcode, out, err = exec_packer(["-d", imgPath, self.tmpdir])
         if "Image unpack OK!" not in out:
             self.generalLog.error("Unpack result:\n{0}".format(out))
@@ -478,7 +454,6 @@ class Burner(threading.Thread):
         self.img = img        
         self.device = device
 
-        self.deviceLog = self.device.deviceLog
         self.generalLog = logging.getLogger("General")
 
         self.reset = args.reset
@@ -493,8 +468,15 @@ class Burner(threading.Thread):
         self.daemon = True
         self.start()
 
+    def GeneralLog(self, msg, level = logging.INFO):
+        self.generalLog.log(level, "%s %s", self.device.GetDesciption(), msg)
+        self.DeviceLog(msg, level)
+
+    def DeviceLog(self, msg, level = logging.INFO):
+        self.device.deviceLog.log(level, "%s", msg)
+
     def run(self):
-        self.generalLog.info("{0}: Start burning".format(self.device.GetDesciption()))
+        self.GeneralLog("Start burning")
 
         try:
             self.DestroyBoot()
@@ -510,8 +492,6 @@ class Burner(threading.Thread):
                 self.InitializingDDR()
                 self.RunningUboot()
 
-                self.device.WaitReconnect()
-
                 # Need this command to avoid to loose 4 bytes of commands after reset
                 self.device.RunUpdate("bulkcmd", ["echo 12345"])
 
@@ -525,29 +505,33 @@ class Burner(threading.Thread):
 
             self.ResettingBoard()
 
-            self.generalLog.info("{0}: Finished burning".format(self.device.GetDesciption()))
+            self.GeneralLog("Burning done!")
 
         except RuntimeError as exc:
-            self.generalLog.error("{0}: While burning device exception occured:\n{1}".format(self.device.GetDesciption(), exc))
+            self.GeneralLog("Burning ERROR: {0}".format(exc), logging.ERROR)
 
     
     def EfuseUpdate(self, efuseFile):
-        self.deviceLog.info("Programming efuses")
+        self.GeneralLog("Programming efuses...")
         self.device.RunUpdateAssert("write", [efuseFile, "0x03000000"])
         if self.soc == "m8":
             self.device.RunUpdateAssert("bulkcmd", ["efuse secure_boot_set 0x03000000"])
         else:
             self.device.RunUpdateAssert("bulkcmd", ["efuse amlogic_set 0x03000000"])
-        self.deviceLog.info("Programming efuses - OK!")
+        self.GeneralLog("Programming efuses - OK!")
+
 
     def ResettingBoard(self):
         if self.parts != "none":
             if self.reset:
-                self.deviceLog.info("Resetting board")
+                self.GeneralLog("Resetting board...")
                 self.device.RunUpdate("bulkcmd", ["burn_complete 1"])
+                self.device.WaitReconnect()
 
 
     def ProgramAllPartitions(self):
+        self.GeneralLog("Programming all partitions...")
+
         for partition in self.img.imageConfig.GetPartitions():
             if (self.parts == "all" or self.parts == partition.sub_type or 
                 (self.parts == "dtb" and partition.sub_type == "_aml_dtb")):
@@ -562,16 +546,18 @@ class Burner(threading.Thread):
 
                 partition_file = os.path.join(self.img.tmpdir, file)
 
-                if os.path.exists(partition_file):
-                    if partition.sub_type == "_aml_dtb":
-                        self.deviceLog.info("Write dtb partition")
-                    else:
-                        self.deviceLog.info("Write {0} partition".format(partition.sub_type))
+                check_file(partition_file)
+
+                if partition.sub_type == "_aml_dtb":
+                    self.GeneralLog("Write dtb partition")
                 else:
-                    raise RuntimeError("Error writing partition!")
+                    self.GeneralLog("Write {0} partition...".format(partition.sub_type))
                     
                 self.device.RunUpdateAssert("partition", [partition.sub_type, partition_file, partition.file_type])
 
+                self.GeneralLog("Write {0} partition - OK!".format(partition.sub_type))
+
+        self.GeneralLog("Programming all partitions - OK!")
 
     def DataCachePartitionsWiping(self):
         if self.wipe:
@@ -581,19 +567,21 @@ class Burner(threading.Thread):
 
         if self.soc != "m8":
             if self.wipe:
-                self.generalLog.info("Wiping  data partition...")
+                self.GeneralLog("Wiping  data partition...")
                 self.device.RunUpdate("bulkcmd", ["amlmmc erase data"])
                 self.device.RunUpdate("bulkcmd", ["nand erase.part data"])
-                self.generalLog.info("Wiping  data partition - OK!")
+                self.GeneralLog("Wiping  data partition - OK!")
             
-                self.generalLog.info("Wiping cache partition...")
+                self.GeneralLog("Wiping cache partition...")
                 self.device.RunUpdate("bulkcmd", ["amlmmc erase cache"])
                 self.device.RunUpdate("bulkcmd", ["nand erase.part cache"])
-                self.generalLog.info("Wiping cache partition - OK!")
+                self.GeneralLog("Wiping cache partition - OK!")
 
 
 
     def PrepareForLoadingPartitions(self):
+        self.GeneralLog("Prepare for loading partitions...")
+        
         if any(self.soc == item for item in ["gxl", "axg", "txlx", "g12a"]):
             if self.secure:
                 mesonItem = self.img.imageConfig.GetFileBySubType("meson1_ENC")
@@ -608,37 +596,37 @@ class Burner(threading.Thread):
             self.device.RunUpdateAssert("mwrite", [mesonFilePath, "mem", "dtb", "normal"])
 
             if self.parts != "none":
-                self.deviceLog.info("Creating partition...")
+                self.GeneralLog("Creating partition...")
                 if self.wipe:
                     self.device.RunUpdateAssert("bulkcmd", ["disk_initial 1"])
                 else:
                     self.device.RunUpdateAssert("bulkcmd", ["disk_initial 0"])
-                self.deviceLog.info("Creating partition - OK!")
+                self.GeneralLog("Creating partition - OK!")
 
-                self.deviceLog.info("Writing device tree...")
+                self.GeneralLog("Writing device tree...")
                 self.device.RunUpdateAssert("partition", ["_aml_dtb",  self.img.dtbfile])
-                self.deviceLog.info("Writing device tree - OK!")
+                self.GeneralLog("Writing device tree - OK!")
 
-                self.deviceLog.info("Writing bootloader...")
+                self.GeneralLog("Writing bootloader...")
                 self.device.RunUpdateAssert("partition", ["bootloader",  self.img.bootloader_file])
-                self.deviceLog.info("Writing bootloader - OK!")
+                self.GeneralLog("Writing bootloader - OK!")
         else:
             if self.parts != "none":
-                self.deviceLog.info("Creating partition...")
+                self.GeneralLog("Creating partition...")
                 if self.wipe:
                     self.device.RunUpdate("bulkcmd", ["disk_initial 3"])
                     self.device.RunUpdateAssert("bulkcmd", ["disk_initial 2"])
                 else:
                     self.device.RunUpdateAssert("bulkcmd", ["disk_initial 0"])
-                self.deviceLog.info("Creating partition - OK!")
+                self.GeneralLog("Creating partition - OK!")
 
-                self.deviceLog.info("Writing bootloader...")
+                self.GeneralLog("Writing bootloader...")
                 self.device.RunUpdateAssert("partition", ["bootloader", self.img.bootloader_file])
-                self.deviceLog.info("Writing bootloader - OK!")
+                self.GeneralLog("Writing bootloader - OK!")
 
-                self.deviceLog.info("Writing device tree...")
+                self.GeneralLog("Writing device tree...")
                 self.device.RunUpdateAssert("mwrite", [self.img.dtbfile, "mem", "dtb", "normal"])
-                self.deviceLog.info("Writing device tree - OK!")
+                self.GeneralLog("Writing device tree - OK!")
 
         if self.parts != "none":
             self.device.RunUpdate("bulkcmd", ["setenv upgrade_step 1"])
@@ -647,12 +635,15 @@ class Burner(threading.Thread):
         if "m8" == self.soc:
             self.device.RunUpdate("bulkcmd", ["save_setting"])
 
+        self.GeneralLog("Prepare for loading partitions - OK!")
+        
+
     def InitializingDDR(self):
+        self.GeneralLog("Initializing DDR...")
         if any(self.soc == item for item in ["gxl", "axg", "txlx"]):
             self.device.RunUpdateAssert("cwr", [self.img.bl2, self.img.platformConfig.DDRLoad])
             self.device.RunUpdateAssert("write", [self.img.ddr, self.img.platformConfig.bl2ParaAddr])
             self.device.RunUpdateAssert("run", [self.img.platformConfig.DDRRun])
-            time.sleep(8)
 
             self.usbProtocol = self.device.Identify(4)
             if self.usbProtocol == "8":
@@ -661,18 +652,17 @@ class Burner(threading.Thread):
         elif "g12a" == self.soc:
             self.device.RunUpdateAssert("write", [self.img.tpl, self.img.platformConfig.DDRLoad, "0x10000"])
             self.device.RunUpdateAssert("run", [self.img.platformConfig.DDRLoad])
-            time.sleep(8)
 
         elif "m8" == self.soc:
             time.sleep(6)
             self.device.RunUpdateAssert("cwr", self.img.bl2, self.img.platformConfig.DDRLoad)
             self.device.RunUpdateAssert("run", self.img.platformConfig.DDRRun)
-            time.sleep(8)
 
-        self.deviceLog.info("Done InitializingDDR")
+        time.sleep(10)
+        self.GeneralLog("Initializing DDR - OK!")
 
     def RunningUboot(self):
-        self.deviceLog.info("Start running u-boot")
+        self.GeneralLog("Running u-boot...")
 
         if any(self.soc == item for item in ["gxl", "axg", "txlx"]):
             self.device.RunUpdateAssert("write", [self.img.bl2, self.img.platformConfig.DDRLoad])
@@ -707,12 +697,12 @@ class Burner(threading.Thread):
             else:
                 self.device.RunUpdateAssert("write", [self.img.tpl, self.img.platformConfig.Uboot_enc_down])
                 self.device.RunUpdateAssert("run", [self.img.platformConfig.Uboot_enc_run])
-                # time.sleep(8)
 
-        # time.sleep(8)
-        self.deviceLog.info("Finish running u-boot")
+        self.GeneralLog("Running u-boot - OK!")
+        self.device.WaitReconnect()
 
     def CheckIfBoardIsSecure(self):
+        self.GeneralLog("Check if board is secure...")
         if "gxl" == self.soc:
             retcode, out, err = self.device.RunUpdateReturn("rreg", ["4", "0xc8100228"])
             match = re.search(r'c8100228:\s*(\w+)', out.lower())
@@ -739,17 +729,17 @@ class Burner(threading.Thread):
                 raise RuntimeError("Can't read secure information!")
 
         if self.secure:
-            self.generalLog.info("{0}: Board is in secure mode".format(self.device.GetDesciption()))
+            self.GeneralLog("Board is IN secure mode")
         else:
-            self.generalLog.info("{0}: Board is not in secure mode".format(self.device.GetDesciption()))
+            self.GeneralLog("Board is NOT IN secure mode")
 
     def DestroyBoot(self):
-        self.generalLog.info("{0}: Start destroy the boot".format(self.device.GetDesciption()))
+        self.GeneralLog("Destroy the boot...")
 
         if any(self.parts in part for part in ["all", "bootloader", "", "none"]):
             retcode, out, err = self.device.RunUpdate("bulkcmd", ["echo 12345"])
             if retcode == 0:
-                self.deviceLog.info("{0}: Rebooting the board".format(self.device.GetDesciption()))
+                self.GeneralLog("Rebooting the board")
                 retcode, out, err = self.device.RunUpdate("bulkcmd", ["bootloader_is_old"])
                 retcode, out, err = self.device.RunUpdateAssert("bulkcmd", ["erase_bootloader"])
                 if self.destroy:
@@ -758,13 +748,13 @@ class Burner(threading.Thread):
                     self.device.RunUpdate("bulkcmd", ["nand erase 0 4096"])
 
                 self.device.RunUpdate("bulkcmd", ["reset"])
+                self.device.WaitReconnect()
                 time.sleep(8)
 
-        if self.destroy:
-            self.generalLog("{0}: Destroy boot done".format(self.device.GetDesciption()))
-            exit(0)
+        self.GeneralLog("Destroy the boot - OK!")
 
-        self.generalLog.info("{0}: Finish destroy the boot".format(self.device.GetDesciption()))
+        if self.destroy:
+            exit(0)
 
 def ParseArgs():
     def isValidFile(parser, arg):
@@ -783,7 +773,7 @@ def ParseArgs():
                         help="Specify which partition to burn")
     parser.add_argument("--wipe", dest="wipe", default=False,
                         action='store_true', help="Destroy all partitions")
-    parser.add_argument("--reset", dest="reset", default=True,
+    parser.add_argument("--reset", dest="reset", default=False,
                         action='store_true', help="Force reset mode at the end of the burning")
     parser.add_argument("--soc", dest="soc", choices=["gxl", "axg", "txlx", "g12a", "m8"], default="gxl",
                         help="Force soc type (gxl=S905/S912,axg=A113,txlx=T962,g12a=S905X2,m8=S805/A111)")
@@ -818,6 +808,10 @@ if __name__ == "__main__":
         try:
             retcode, out, err = exec_update(["scan"])
 
+            for chipid in list(burners.keys()):
+                if not burners[chipid].is_alive():
+                    burners.pop(chipid)
+
             devPathes = []
 
             for match in regexp_device.finditer(out):
@@ -828,14 +822,11 @@ if __name__ == "__main__":
                     chipid = GetChipId(devPath)
                     if chipid != None:
                         if chipid not in burners:
+                            # New device, start burning it
                             burners[chipid] = Burner(img, Device(logger, devPath, chipid), args)
                         else:
-                            if not burners[chipid].is_alive():
-                                burner = burners.pop(chipid)
-                                burned[chipid] = burner.device.devPath
-                            else:
-                                burners[chipid].device.DetectReconnect(devPath)
-
+                            # Burner waits reconnect of the device
+                            burners[chipid].device.DetectReconnect(devPath)
 
                 devPathes.append(devPath)
 
