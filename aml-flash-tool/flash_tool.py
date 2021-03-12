@@ -1,48 +1,28 @@
-import re
-import sys
+import argparse
+import datetime
+import logging
 import os
+import re
+import shutil
+import signal
 import subprocess
+import sys
+import tempfile
 import threading
 import time
-import argparse
-import shutil
-import tempfile
-import logging
-import time
-import datetime
 
-TOOL_PATH = "/home/kravserg/Git/aml-utils/aml-flash-tool/tools/linux-x86/"
+# TOOL_PATH = "/home/kravserg/Git/aml-utils/aml-flash-tool/tools/linux-x86/"
+TOOL_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "tools/linux-x86/")
+
+mainLoopFlag = True
 
 
-def check_file(filePath : str):
+def check_file(filePath):
     if not os.path.exists(filePath):
         raise RuntimeError("File {0} not exists!".format(filePath))
 
-def exec_packer(args):
-    """ Execute aml_image_v2_packer for manipulate with imaged
 
-    Args:
-        args (list): Arguments for aml_image_v2_packer tool
-
-    Returns:
-        int, str, str: Return result of execute command: retcode, stdout, stderr
-    """
-    cmd = [TOOL_PATH + "aml_image_v2_packer"] + args
-    return exec(cmd)
-
-def exec_update(args):
-    """ Execute update for flashing device
-
-    Args:
-        args (list): Arguments for update tool
-
-    Returns:
-        int, str, str: Return result of execute command: retcode, stdout, stderr
-    """
-    cmd = [TOOL_PATH + "update"] + args
-    return exec(cmd)
-
-def exec(cmd):
+def exec_cmd(cmd):
     """ Executor of the shell comand
 
     Args:
@@ -64,11 +44,38 @@ def exec(cmd):
         return retcode, out, err
     raise RuntimeError("Can't exec command: " + ' '.join(proc.args))
 
-def GetChipId(devPath : str):
-    """ Get device chip ID 
+
+def exec_packer(args):
+    """ Execute aml_image_v2_packer for manipulate with imaged
 
     Args:
-        devPath (str): path to connected device, for example 'Bus 001 Device 087: ID 1b8e:c003' 
+        args (list): Arguments for aml_image_v2_packer tool
+
+    Returns:
+        int, str, str: Return result of execute command: retcode, stdout, stderr
+    """
+    cmd = [TOOL_PATH + "aml_image_v2_packer"] + args
+    return exec_cmd(cmd)
+
+
+def exec_update(args):
+    """ Execute update for flashing device
+
+    Args:
+        args (list): Arguments for update tool
+
+    Returns:
+        int, str, str: Return result of execute command: retcode, stdout, stderr
+    """
+    cmd = [TOOL_PATH + "update"] + args
+    return exec_cmd(cmd)
+
+
+def GetChipId(devPath):
+    """ Get device chip ID
+
+    Args:
+        devPath (str): path to connected device, for example 'Bus 001 Device 087: ID 1b8e:c003'
 
     Returns:
         [str | None]: chipid in hex representation, None - if can't get chip id
@@ -92,10 +99,11 @@ def GetChipId(devPath : str):
         if res:
             chipid = "0x" + res.group(1)
 
-    if chipid != None:
+    if chipid is not None:
         log.info("[{0}]: chipID : {1}".format(devPath, chipid))
 
     return chipid
+
 
 class Logger:
 
@@ -142,7 +150,7 @@ class Logger:
         """Get logging instance to save all logs of burning process
 
         Args:
-            chipID (str): chipid of this device 
+            chipID (str): chipid of this device
 
         Returns:
             logging: instance of logging
@@ -160,8 +168,9 @@ class Logger:
 
         return logDevice
 
+
 class Device:
-    def __init__(self, logger : Logger, devPath : str, chipid : str):
+    def __init__(self, logger, devPath, chipid):
         self.devLock = threading.Lock()
 
         self.chipId = chipid
@@ -172,18 +181,17 @@ class Device:
 
         self.waitReconnect = False
 
-    def WaitReconnect(self, timeout : int = 10):
+    def WaitReconnect(self, timeout=20):
         self.generalLog.info("{0} Wait reconnect...".format(self.GetDesciption()))
         with self.devLock:
-            self.devPath = None
             self.waitReconnect = True
 
         while self.waitReconnect and timeout > 0:
             timeout -= 1
             time.sleep(1)
-            
+
         if timeout == 0:
-            raise RuntimeError("Device with chip ID {0} didn't reconnected!".format(self.GetDesciption()))
+            raise RuntimeError("Device didn't reconnected!")
 
     def DetectReconnect(self, newDevPath):
         self.generalLog.info("{0} Reconnected: new devPath: {1}".format(self.GetDesciption(), newDevPath))
@@ -194,14 +202,14 @@ class Device:
     def Identify(self, idx):
         retcode, out, err = self.RunUpdateReturn("identify", ["7"])
         match = re.search(r'firmware', out)
-        if match != None:
+        if match is not None:
             match = re.search(r'(\d)-(\d)-(\d)-(\d)-(\d)-(\d)-(\d)', out)
             if match and idx < 7:
                 return match.group(idx + 1)
         raise RuntimeError("Can't identify device!")
 
     def GetDesciption(self):
-        desc = "[" 
+        desc = "["
         if self.devPath:
             desc += self.devPath + " "
         desc += self.chipId + "]"
@@ -241,6 +249,7 @@ class Device:
             raise RuntimeError("Error execute: update {0} {1}".format(cmd, ' '.join(args)))
         return retcode, out, err
 
+
 class ImageConfig:
     class Item:
         def __init__(self, file, main_type, sub_type, file_type):
@@ -253,7 +262,7 @@ class ImageConfig:
         def ToString(self):
             return '; '.join(['{0}: {1}'.format(k, v) for k, v in self.__dict__.items()])
 
-    def __init__(self, filePath : str):
+    def __init__(self, filePath):
         self.filePath = filePath
         self.items = {}
 
@@ -274,14 +283,15 @@ class ImageConfig:
                 partitions.append(item)
         return partitions
 
-    def GetFileBySubType(self, sub_type) -> Item:
+    def GetFileBySubType(self, sub_type):
         return self.items.get(sub_type, None)
 
     def ToString(self):
         return '\n'.join(['{0}: [{1}]'.format(k, v.ToString()) for k, v in self.items.items()])
 
+
 class PlatformConfig:
-    def __init__(self, filePath : str):
+    def __init__(self, filePath):
 
         with open(filePath, 'r') as file:
             text = ''.join(file.readlines())
@@ -307,20 +317,13 @@ class PlatformConfig:
     def ToString(self):
         return '\n'.join(['{0}: {1}'.format(k, v) for k, v in self.__dict__.items()])
 
+
 class Image:
 
-    def __init__(self, imgPath):
+    def __init__(self, imgPath, ubootFile=None):
         self.generalLog = logging.getLogger("General")
 
-        self.uboot = None
-        self.dtbfile = None
-        self.ddr = None
-        self.fip = None
-        self.bl2 = None
-        self.tpl = None
-
-        # self.imageConfig = None
-        self.platformConfig = None
+        self.ubootFile = ubootFile
 
         self.generalLog.info("Unpacking image '{0}' ...".format(imgPath))
 
@@ -342,13 +345,11 @@ class Image:
 
         # Read image config file
         imageConfigPath = os.path.join(self.tmpdir, "image.cfg")
-        if os.path.exists(imageConfigPath):
-            self.imageConfig = ImageConfig(imageConfigPath)
-            self.generalLog.info("Image config:\n{0}".format(
-                self.imageConfig.ToString()))
-        else:
-            self.generalLog.error("Image config file {0} doesn't exist".format(imageConfigPath))
-            raise RuntimeError("Can't find image.cfg file!")
+        check_file(imageConfigPath)
+
+        self.imageConfig = ImageConfig(imageConfigPath)
+        self.generalLog.info("Image config:\n{0}".format(
+            self.imageConfig.ToString()))
 
         # Read platform config file
         platformConfigFile = self.imageConfig.GetFileBySubType('platform')
@@ -360,119 +361,139 @@ class Image:
             self.platformConfig = PlatformConfig(platformFilePath)
             self.generalLog.info("Platform config:\n{0}".format(self.platformConfig.ToString()))
         else:
-            self.generalLog.error("Can't find platform config in image.cfg!")
-            exit(1)
+            raise RuntimeError("Can't find platform config in image.cfg!")
 
+    def Cleanup(self):
+        if os.path.exists(self.tmpdir):
+            self.generalLog.info("Cleanup tmp directory: " + self.tmpdir)
+            shutil.rmtree(self.tmpdir)
 
-    def Configure(self, parts : str, soc : str,  secure : bool, ubootPath : str = None):
-        # DDR and FIP files
+    def GetDDR(self, soc):
+        ddr = None
         if any(soc == item for item in ["gxl", "axg", "txlx"]):
-            self.ddr = os.path.join(TOOL_PATH, "usbbl2runpara_ddrinit.bin")
-            check_file(self.ddr)
-            self.fip = os.path.join(TOOL_PATH, "usbbl2runpara_runfipimg.bin")
-            check_file(self.fip)
-        elif soc == "m8":
-            self.fip = os.path.join(TOOL_PATH, "decompressPara_4M.dump")
-            check_file(self.fip)
+            ddr = os.path.join(TOOL_PATH, "usbbl2runpara_ddrinit.bin")
+            check_file(ddr)
+        return ddr
 
-        # Botloader file
-        if self.imageConfig.items["bootloader"]:
-            self.bootloader_file = os.path.join(self.tmpdir, self.imageConfig.items["bootloader"].file)
-            check_file(self.bootloader_file)
+    def GetFIP(self, soc):
+        fip = None
+        if any(soc == item for item in ["gxl", "axg", "txlx"]):
+            fip = os.path.join(TOOL_PATH, "usbbl2runpara_runfipimg.bin")
+            check_file(fip)
+        elif soc == "m8":
+            fip = os.path.join(TOOL_PATH, "decompressPara_4M.dump")
+            check_file(fip)
+        return fip
+
+    def GetBootloader(self):
+        if self.imageConfig.items.get("bootloader") is not None:
+            bootloader_file = os.path.join(self.tmpdir, self.imageConfig.items["bootloader"].file)
+            check_file(bootloader_file)
+            return bootloader_file
         else:
             self.generalLog.error("Can't find bootloader file!")
             exit(1)
-        self.generalLog.info("Botloader file: {0}".format(self.bootloader_file))
 
-        # DTB file
+    def GetDTB(self, soc):
         if any(soc == item for item in ["gxl", "axg", "txlx", "g12a"]):
             if self.imageConfig.items["_aml_dtb"]:
-                self.dtbfile = os.path.join(self.tmpdir, self.imageConfig.items["_aml_dtb"].file)
+                dtbfile = os.path.join(self.tmpdir, self.imageConfig.items["_aml_dtb"].file)
         elif soc == "m8":
             if self.imageConfig.items["meson"]:
-                self.dtbfile = os.path.join(self.tmpdir, self.imageConfig.items["meson"].file)
-
-        check_file(self.dtbfile)                
-        self.generalLog.info("DTB file: {0}".format(self.dtbfile))
-
-        # bl2 and tpl files
-        if ubootPath == None:
-            if secure == False:
-                self.bl2 = os.path.join(self.tmpdir, self.imageConfig.items["DDR"].file)
-                if self.imageConfig.items.get("UBOOT_COMP"):
-                    self.tpl = os.path.join(self.tmpdir, self.imageConfig.items["UBOOT_COMP"].file)
-                else:
-                    self.tpl = os.path.join(self.tmpdir, self.imageConfig.items["UBOOT"].file)
-            else:
-                if not self.imageConfig.items.get("DDR_ENC") or not self.imageConfig.items.get("UBOOT_ENC"):
-                    self.generalLog.error("Your board is secured but the image you want to flash does not contain any signed bootloader!")
-                    exit(1)
-                else:
-                    self.bl2 = os.path.join(self.tmpdir, self.imageConfig.items["DDR_ENC"].file)
-                    self.tpl = os.path.join(self.tmpdir, self.imageConfig.items["UBOOT_ENC"].file)
+                dtbfile = os.path.join(self.tmpdir, self.imageConfig.items["meson"].file)
         else:
-            if not os.path.exists(ubootPath):
-                self.generalLog.error("Uboot file {0} doesn't exist!".format(ubootPath))
-                exit(1)
-            self.generalLog.info("Uboot file: {0}".format(ubootPath))
-                
-            if any(soc == item for item in ["gxl", "axg", "txlx"]):
-                self.bl2 = os.path.join(self.tmpdir, "uboot_file_bl2.bin")
-                self.tpl = os.path.join(self.tmpdir, "uboot_file_tpl.bin")
-                exec(["dd", "&>/dev/null", "if=" + ubootPath, "of=" + self.bl2, "bs=49152", "count=1"])
-                exec(["dd", "&>/dev/null", "if=" + ubootPath, "of=" + self.tpl, "bs=49152", "skip=1"])
+            raise RuntimeError("Unknown soc: " + soc)
+
+        check_file(dtbfile)
+        return dtbfile
+
+    def GetBL2(self, soc, secure):
+        bl2 = None
+        if self.ubootFile is None:
+            if secure is False:
+                bl2 = os.path.join(self.tmpdir, self.imageConfig.items["DDR"].file)
             else:
-                self.bl2 = os.path.join(self.tmpdir, self.imageConfig.items["DDR"].file)
-                self.tpl = ubootPath
+                if self.imageConfig.items.get("DDR_ENC") is None:
+                    raise RuntimeError(
+                        "Your board is secured but the image you want to flash does not contain any signed bootloader!"
+                    )
+                else:
+                    bl2 = os.path.join(self.tmpdir, self.imageConfig.items["DDR_ENC"].file)
+        else:
+            check_file(self.ubootFile)
 
-        if self.bl2 != None:
-            check_file(self.bl2)
-            self.generalLog.info("bl2 file: {0}".format(self.bl2))
+            if any(soc == item for item in ["gxl", "axg", "txlx"]):
+                bl2 = os.path.join(self.tmpdir, "uboot_file_bl2.bin")
+                if not os.path.exists(bl2):
+                    exec_cmd(["dd", "&>/dev/null", "if=" + self.ubootFile, "of=" + bl2, "bs=49152", "count=1"])
+            else:
+                bl2 = os.path.join(self.tmpdir, self.imageConfig.items["DDR"].file)
 
-        if self.tpl != None:
-            check_file(self.tpl)
-            self.generalLog.info("tpl file: {0}".format(self.tpl))
+        if bl2 is not None:
+            check_file(bl2)
 
+        return bl2
 
-class bcolors:
-    HEADER = '\033[95m'
-    OKBLUE = '\033[94m'
-    OKCYAN = '\033[96m'
-    OKGREEN = '\033[92m'
-    WARNING = '\033[93m'
-    FAIL = '\033[91m'
-    ENDC = '\033[0m'
-    BOLD = '\033[1m'
-    UNDERLINE = '\033[4m'
+    def GetTPL(self, soc, secure):
+        tpl = None
+        if self.ubootFile is None:
+            if secure is False:
+                if self.imageConfig.items.get("UBOOT_COMP") is not None:
+                    tpl = os.path.join(self.tmpdir, self.imageConfig.items["UBOOT_COMP"].file)
+                else:
+                    tpl = os.path.join(self.tmpdir, self.imageConfig.items["UBOOT"].file)
+            else:
+                if self.imageConfig.items.get("UBOOT_ENC") is None:
+                    raise RuntimeError(
+                        "Your board is secured but the image you want to flash does not contain any signed bootloader!"
+                    )
+                else:
+                    tpl = os.path.join(self.tmpdir, self.imageConfig.items["UBOOT_ENC"].file)
+        else:
+            check_file(self.ubootFile)
 
+            if any(soc == item for item in ["gxl", "axg", "txlx"]):
+                tpl = os.path.join(self.tmpdir, "uboot_file_tpl.bin")
+                if not os.path.exists(tpl):
+                    exec_cmd(["dd", "&>/dev/null", "if=" + self.ubootFile, "of=" + tpl, "bs=49152", "skip=1"])
+            else:
+                tpl = self.ubootFile
+
+        if tpl is not None:
+            check_file(tpl)
+
+        return tpl
 
 
 class Burner(threading.Thread):
-    # def __init__(self, img : Image, logger : Logger, device, soc, part, wipe, destroy, reset):
-    def __init__(self, img : Image, device : Device, args):
+
+    def __init__(self, img, device, args):
         threading.Thread.__init__(self)
-        self.img = img        
+        self.img = img
         self.device = device
 
         self.generalLog = logging.getLogger("General")
 
+        # Constant arguments
+        self.ubootFile = None   # TODO not implemented
+        self.efuseFile = args.efuse_file
         self.reset = args.reset
         self.soc = args.soc
         self.parts = args.parts
         self.destroy = args.destroy
         self.wipe = args.wipe
 
+        # Device denepds
         self.secure = None
-        self.chipID = None
 
         self.daemon = True
         self.start()
 
-    def GeneralLog(self, msg, level = logging.INFO):
+    def GeneralLog(self, msg, level=logging.INFO):
         self.generalLog.log(level, "%s %s", self.device.GetDesciption(), msg)
         self.DeviceLog(msg, level)
 
-    def DeviceLog(self, msg, level = logging.INFO):
+    def DeviceLog(self, msg, level=logging.INFO):
         self.device.deviceLog.log(level, "%s", msg)
 
     def run(self):
@@ -487,9 +508,9 @@ class Burner(threading.Thread):
             self.CheckIfBoardIsSecure()
 
             if any(self.parts in part for part in ["all", "bootloader", "none"]):
-                self.img.Configure(parts = self.parts, soc = self.soc, secure = self.secure)
 
                 self.InitializingDDR()
+
                 self.RunningUboot()
 
                 # Need this command to avoid to loose 4 bytes of commands after reset
@@ -501,7 +522,7 @@ class Burner(threading.Thread):
 
             self.ProgramAllPartitions()
 
-            # self.EfuseUpdate()
+            self.EfuseUpdate()
 
             self.ResettingBoard()
 
@@ -510,16 +531,20 @@ class Burner(threading.Thread):
         except RuntimeError as exc:
             self.GeneralLog("Burning ERROR: {0}".format(exc), logging.ERROR)
 
-    
-    def EfuseUpdate(self, efuseFile):
-        self.GeneralLog("Programming efuses...")
-        self.device.RunUpdateAssert("write", [efuseFile, "0x03000000"])
-        if self.soc == "m8":
-            self.device.RunUpdateAssert("bulkcmd", ["efuse secure_boot_set 0x03000000"])
-        else:
-            self.device.RunUpdateAssert("bulkcmd", ["efuse amlogic_set 0x03000000"])
-        self.GeneralLog("Programming efuses - OK!")
+    def EfuseUpdate(self):
+        if self.efuseFile is not None:
+            self.GeneralLog("Programming efuses...")
+            self.GeneralLog("Efuse file: " + self.efuseFile)
 
+            check_file(self.efuseFile)
+
+            self.GeneralLog("Debug out to don't secureboot device", logging.WARNING)
+            # self.device.RunUpdateAssert("write", [self.efuseFile, "0x03000000"])
+            # if self.soc == "m8":
+            #     self.device.RunUpdateAssert("bulkcmd", ["efuse secure_boot_set 0x03000000"])
+            # else:
+            #     self.device.RunUpdateAssert("bulkcmd", ["efuse amlogic_set 0x03000000"])
+            self.GeneralLog("Programming efuses - OK!")
 
     def ResettingBoard(self):
         if self.parts != "none":
@@ -528,19 +553,18 @@ class Burner(threading.Thread):
                 self.device.RunUpdate("bulkcmd", ["burn_complete 1"])
                 self.device.WaitReconnect()
 
-
     def ProgramAllPartitions(self):
         self.GeneralLog("Programming all partitions...")
 
         for partition in self.img.imageConfig.GetPartitions():
-            if (self.parts == "all" or self.parts == partition.sub_type or 
-                (self.parts == "dtb" and partition.sub_type == "_aml_dtb")):
+            if (self.parts == "all" or self.parts == partition.sub_type or
+                    (self.parts == "dtb" and partition.sub_type == "_aml_dtb")):
 
                 if partition.sub_type == "bootloader" or (partition.sub_type == "_aml_dtb" and self.parts != "dtb"):
                     continue
 
                 if partition.sub_type == "_aml_dtb":
-                    file = self.img.dtbfile
+                    file = self.img.GetDTB(self.soc)
                 else:
                     file = partition.file
 
@@ -552,7 +576,7 @@ class Burner(threading.Thread):
                     self.GeneralLog("Write dtb partition")
                 else:
                     self.GeneralLog("Write {0} partition...".format(partition.sub_type))
-                    
+
                 self.device.RunUpdateAssert("partition", [partition.sub_type, partition_file, partition.file_type])
 
                 self.GeneralLog("Write {0} partition - OK!".format(partition.sub_type))
@@ -571,23 +595,21 @@ class Burner(threading.Thread):
                 self.device.RunUpdate("bulkcmd", ["amlmmc erase data"])
                 self.device.RunUpdate("bulkcmd", ["nand erase.part data"])
                 self.GeneralLog("Wiping  data partition - OK!")
-            
+
                 self.GeneralLog("Wiping cache partition...")
                 self.device.RunUpdate("bulkcmd", ["amlmmc erase cache"])
                 self.device.RunUpdate("bulkcmd", ["nand erase.part cache"])
                 self.GeneralLog("Wiping cache partition - OK!")
 
-
-
     def PrepareForLoadingPartitions(self):
         self.GeneralLog("Prepare for loading partitions...")
-        
+
         if any(self.soc == item for item in ["gxl", "axg", "txlx", "g12a"]):
             if self.secure:
                 mesonItem = self.img.imageConfig.GetFileBySubType("meson1_ENC")
             else:
                 mesonItem = self.img.imageConfig.GetFileBySubType("meson1")
-            if mesonItem == None:
+            if mesonItem is None:
                 raise RuntimeError("Can't find meson1 file!")
 
             mesonFilePath = os.path.join(self.img.tmpdir, mesonItem.file)
@@ -604,11 +626,15 @@ class Burner(threading.Thread):
                 self.GeneralLog("Creating partition - OK!")
 
                 self.GeneralLog("Writing device tree...")
-                self.device.RunUpdateAssert("partition", ["_aml_dtb",  self.img.dtbfile])
+                dtb = self.img.GetDTB(self.soc)
+                self.GeneralLog("DTB file: " + dtb)
+                self.device.RunUpdateAssert("partition", ["_aml_dtb",  dtb])
                 self.GeneralLog("Writing device tree - OK!")
 
                 self.GeneralLog("Writing bootloader...")
-                self.device.RunUpdateAssert("partition", ["bootloader",  self.img.bootloader_file])
+                bootloader = self.img.GetBootloader()
+                self.GeneralLog("Bootloader file: " + bootloader)
+                self.device.RunUpdateAssert("partition", ["bootloader",  bootloader])
                 self.GeneralLog("Writing bootloader - OK!")
         else:
             if self.parts != "none":
@@ -621,11 +647,15 @@ class Burner(threading.Thread):
                 self.GeneralLog("Creating partition - OK!")
 
                 self.GeneralLog("Writing bootloader...")
-                self.device.RunUpdateAssert("partition", ["bootloader", self.img.bootloader_file])
+                bootloader = self.img.GetBootloader()
+                self.GeneralLog("Bootloader file: " + bootloader)
+                self.device.RunUpdateAssert("partition", ["bootloader", bootloader])
                 self.GeneralLog("Writing bootloader - OK!")
 
                 self.GeneralLog("Writing device tree...")
-                self.device.RunUpdateAssert("mwrite", [self.img.dtbfile, "mem", "dtb", "normal"])
+                dtb = self.img.GetDTB(self.soc)
+                self.GeneralLog("DTB file: " + dtb)
+                self.device.RunUpdateAssert("mwrite", [dtb, "mem", "dtb", "normal"])
                 self.GeneralLog("Writing device tree - OK!")
 
         if self.parts != "none":
@@ -636,13 +666,20 @@ class Burner(threading.Thread):
             self.device.RunUpdate("bulkcmd", ["save_setting"])
 
         self.GeneralLog("Prepare for loading partitions - OK!")
-        
 
     def InitializingDDR(self):
         self.GeneralLog("Initializing DDR...")
+
         if any(self.soc == item for item in ["gxl", "axg", "txlx"]):
-            self.device.RunUpdateAssert("cwr", [self.img.bl2, self.img.platformConfig.DDRLoad])
-            self.device.RunUpdateAssert("write", [self.img.ddr, self.img.platformConfig.bl2ParaAddr])
+
+            bl2 = self.img.GetBL2(self.soc, self.secure)
+            self.GeneralLog("BL2 file: " + bl2)
+
+            ddr = self.img.GetDDR(self.soc)
+            self.GeneralLog("DDR file: " + ddr)
+
+            self.device.RunUpdateAssert("cwr", [bl2, self.img.platformConfig.DDRLoad])
+            self.device.RunUpdateAssert("write", [ddr, self.img.platformConfig.bl2ParaAddr])
             self.device.RunUpdateAssert("run", [self.img.platformConfig.DDRRun])
 
             self.usbProtocol = self.device.Identify(4)
@@ -650,12 +687,19 @@ class Burner(threading.Thread):
                 self.device.RunUpdateAssert("run", self.img.platformConfig.bl2ParaAddr)
 
         elif "g12a" == self.soc:
-            self.device.RunUpdateAssert("write", [self.img.tpl, self.img.platformConfig.DDRLoad, "0x10000"])
+            tpl = self.img.GetTPL(self.soc, self.secure)
+            self.GeneralLog("TPL file: " + tpl)
+
+            self.device.RunUpdateAssert("write", [tpl, self.img.platformConfig.DDRLoad, "0x10000"])
             self.device.RunUpdateAssert("run", [self.img.platformConfig.DDRLoad])
 
         elif "m8" == self.soc:
             time.sleep(6)
-            self.device.RunUpdateAssert("cwr", self.img.bl2, self.img.platformConfig.DDRLoad)
+
+            bl2 = self.img.GetBL2(self.soc, self.secure)
+            self.GeneralLog("BL2 file: " + bl2)
+
+            self.device.RunUpdateAssert("cwr", bl2, self.img.platformConfig.DDRLoad)
             self.device.RunUpdateAssert("run", self.img.platformConfig.DDRRun)
 
         time.sleep(10)
@@ -665,29 +709,46 @@ class Burner(threading.Thread):
         self.GeneralLog("Running u-boot...")
 
         if any(self.soc == item for item in ["gxl", "axg", "txlx"]):
-            self.device.RunUpdateAssert("write", [self.img.bl2, self.img.platformConfig.DDRLoad])
-            self.device.RunUpdateAssert("write", [self.img.fip, self.img.platformConfig.bl2ParaAddr])
-            self.device.RunUpdateAssert("write", [self.img.tpl, self.img.platformConfig.UbootLoad])
+            bl2 = self.img.GetBL2(self.soc, self.secure)
+            self.GeneralLog("BL2 file: " + bl2)
+            tpl = self.img.GetTPL(self.soc, self.secure)
+            self.GeneralLog("TPL file: " + tpl)
+            fip = self.img.GetFIP(self.soc)
+            self.GeneralLog("FIP file: " + tpl)
+
+            self.device.RunUpdateAssert("write", [bl2, self.img.platformConfig.DDRLoad])
+            self.device.RunUpdateAssert("write", [fip, self.img.platformConfig.bl2ParaAddr])
+            self.device.RunUpdateAssert("write", [tpl, self.img.platformConfig.UbootLoad])
 
             if self.usbProtocol == "8":
                 self.device.RunUpdateAssert("run", [self.img.platformConfig.bl2ParaAddr])
             else:
                 self.device.RunUpdateAssert("run", [self.img.platformConfig.UbootRun])
-        
+
         elif "g12a" == self.soc:
-            self.device.RunUpdateAssert("bl2_boot", [self.img.tpl])
+            tpl = self.img.GetTPL(self.soc, self.secure)
+            self.GeneralLog("TPL file: " + tpl)
+
+            self.device.RunUpdateAssert("bl2_boot", [tpl])
 
         elif "m8" == self.soc:
-            self.device.RunUpdateAssert("write", [self.img.fip, self.img.PlatformConfig.BinPara])
-            if self.secure == False:
-                self.device.RunUpdateAssert("write", [self.img.tpl, "0x00400000"])
+            fip = self.img.GetFIP(self.soc)
+            self.GeneralLog("FIP file: " + tpl)
+
+            tpl = self.img.GetTPL(self.soc, self.secure)
+            self.GeneralLog("TPL file: " + tpl)
+
+            self.device.RunUpdateAssert("write", [fip, self.img.PlatformConfig.BinPara])
+
+            if self.secure is False:
+                self.device.RunUpdateAssert("write", [tpl, "0x00400000"])
                 self.device.RunUpdateAssert("run", [self.img.platformConfig.Uboot_decomp])
                 time.sleep(13)
 
                 # TODO check this place
                 addr = format(int(self.img.platformConfig.BinPara, 16) + 0x18, "x")
                 retcode, out, err = self.device.RunUpdateReturn("rreg", ["4", "0x" + addr])
-                match = re.search(addr + ":\s*(\w+)", out, re.IGNORECASE)
+                match = re.search(addr + r":\s*(\w+)", out, re.IGNORECASE)
                 if match:
                     jump_addr = "0x" + match.group(1)
                     self.device.RunUpdateAssert("run", [jump_addr])
@@ -695,7 +756,7 @@ class Burner(threading.Thread):
                     raise RuntimeError("Error while running u-boot for m8")
 
             else:
-                self.device.RunUpdateAssert("write", [self.img.tpl, self.img.platformConfig.Uboot_enc_down])
+                self.device.RunUpdateAssert("write", [tpl, self.img.platformConfig.Uboot_enc_down])
                 self.device.RunUpdateAssert("run", [self.img.platformConfig.Uboot_enc_run])
 
         self.GeneralLog("Running u-boot - OK!")
@@ -756,6 +817,7 @@ class Burner(threading.Thread):
         if self.destroy:
             exit(0)
 
+
 def ParseArgs():
     def isValidFile(parser, arg):
         if os.path.exists(arg):
@@ -766,46 +828,51 @@ def ParseArgs():
     parser = argparse.ArgumentParser(
         description="Argument parsing for automated flashing Amlogic devices",
         add_help=True)
-    parser.add_argument("--img", dest="img", required=True, type=lambda x: isValidFile(parser, x), 
+    parser.add_argument("--img", dest="img", required=True, type=lambda x: isValidFile(parser, x),
                         help="Specify location path to aml_upgrade_package.img")
-    parser.add_argument("--parts", dest="parts", required=True, 
-                        choices=['all', 'none', 'bootloader', 'dtb', 'logo', 'recovery', 'boot', 'system'], 
+    parser.add_argument("--parts", dest="parts", required=True,
+                        choices=['all', 'none', 'bootloader', 'dtb', 'logo', 'recovery', 'boot', 'system'],
                         help="Specify which partition to burn")
     parser.add_argument("--wipe", dest="wipe", default=False,
                         action='store_true', help="Destroy all partitions")
     parser.add_argument("--reset", dest="reset", default=False,
                         action='store_true', help="Force reset mode at the end of the burning")
-    parser.add_argument("--soc", dest="soc", choices=["gxl", "axg", "txlx", "g12a", "m8"], default="gxl",
+    parser.add_argument("--soc", dest="soc", choices=["gxl", "axg", "txlx", "g12a", "m8"], required=True,
                         help="Force soc type (gxl=S905/S912,axg=A113,txlx=T962,g12a=S905X2,m8=S805/A111)")
-    parser.add_argument("--efuse-file", dest="efuse-file",  type=lambda x: isValidFile(parser, x), 
+    parser.add_argument("--efuse-file", dest="efuse_file",  type=lambda x: isValidFile(parser, x), default=None,
                         help="Force efuse OTP burn, use this option carefully")
     parser.add_argument("--destroy", dest="destroy", default=False,
                         action='store_true', help="Erase the bootloader and reset the board")
     # parser.add_argument("--uboot-file") #TODO not implemented
-    # parser.add_argument("--password", dest="password", type=lambda x: is_valid_file(parser, x), 
+    # parser.add_argument("--password", dest="password", type=lambda x: is_valid_file(parser, x),
     #                   help="Unlock usb mode using password file provided") #TODO not implemented
 
     return parser.parse_args()
 
 
+def sigint_handler(sig, frame):
+    global mainLoopFlag
+    logging.getLogger("General").warning("Unexpected program termination: Ctrl+C")
+    mainLoopFlag = False
+
+
 if __name__ == "__main__":
-
     logger = Logger()
-
-    args = ParseArgs()
-
     generalLog = logging.getLogger("General")
 
-    img = Image(imgPath=args.img)
+    signal.signal(signal.SIGINT, sigint_handler)
 
-    burners = {} #  dict[chipId : str, Burner] 
-    burned = {}
-    prevDevPathes = [] # list<devPath>
-    regexp_device = re.compile(r'Bus \d+ Device \d+: ID \w+:\w+', re.MULTILINE)
+    try:
+        args = ParseArgs()
+        img = Image(args.img)
 
-    while(True):
+        burners = {}
+        prevDevPathes = []
 
-        try:
+        regexp_device = re.compile(r'Bus \d+ Device \d+: ID \w+:\w+', re.MULTILINE)
+
+        while mainLoopFlag:
+
             retcode, out, err = exec_update(["scan"])
 
             for chipid in list(burners.keys()):
@@ -816,23 +883,21 @@ if __name__ == "__main__":
 
             for match in regexp_device.finditer(out):
                 devPath = match.group(0)
-
                 if devPath not in prevDevPathes:
                     generalLog.info("New device: " + devPath)
                     chipid = GetChipId(devPath)
-                    if chipid != None:
+                    if chipid is not None:
                         if chipid not in burners:
-                            # New device, start burning it
+                            # New device, start burning it if program not wait finish
                             burners[chipid] = Burner(img, Device(logger, devPath, chipid), args)
                         else:
                             # Burner waits reconnect of the device
                             burners[chipid].device.DetectReconnect(devPath)
-
                 devPathes.append(devPath)
-
             prevDevPathes = devPathes
+            time.sleep(1)
 
-        except RuntimeError as exc:
-            generalLog.error("Device monitoring exception: {0}".format(exc))
+        img.Cleanup()
 
-        time.sleep(1)
+    except RuntimeError as exc:
+        generalLog.error("Unexpected exception: {0}".format(exc))
