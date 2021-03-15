@@ -14,19 +14,27 @@ import time
 # TOOL_PATH = "/home/kravserg/Git/aml-utils/aml-flash-tool/tools/linux-x86/"
 TOOL_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), "tools/linux-x86/")
 
-mainLoopFlag = True
+MainLoopFlag = True
 
 
-def check_file(filePath):
-    if not os.path.exists(filePath):
-        raise RuntimeError("File {0} not exists!".format(filePath))
+def CheckFile(FilePath):
+    """ Check existing file
+
+    Args:
+        FilePath (str): Path to file
+
+    Raises:
+        RuntimeError: File doesn't exist
+    """
+    if not os.path.exists(FilePath):
+        raise RuntimeError("File {0} doesn't exist!".format(FilePath))
 
 
-def exec_cmd(cmd):
+def ExecCmd(Cmd):
     """ Executor of the shell comand
 
     Args:
-        cmd (list): list of parameters to shell execute
+        Cmd (list): list of parameters to shell execute
 
     Raises:
         RuntimeError: If can't create subprocess to execute shell command
@@ -34,75 +42,75 @@ def exec_cmd(cmd):
     Returns:
         int, str, str: Return result of execute command: retcode, stdout, stderr
     """
-    with subprocess.Popen(cmd, bufsize=1, shell=False, stderr=subprocess.PIPE, stdout=subprocess.PIPE) as proc:
-        proc.wait()
+    with subprocess.Popen(Cmd, bufsize=1, shell=False, stderr=subprocess.PIPE, stdout=subprocess.PIPE) as Proc:
+        Proc.wait()
 
-        err = proc.stderr.read().decode("UTF8").strip()
-        out = proc.stdout.read().decode("UTF8").strip()
-        retcode = proc.returncode
+        Err = Proc.stderr.read().decode("UTF8").strip()
+        Out = Proc.stdout.read().decode("UTF8").strip()
+        Retcode = Proc.returncode
 
-        return retcode, out, err
-    raise RuntimeError("Can't exec command: " + ' '.join(proc.args))
+        return Retcode, Out, Err
+    raise RuntimeError("Can't exec command: " + ' '.join(Proc.args))
 
 
-def exec_packer(args):
+def ExecPacker(Args):
     """ Execute aml_image_v2_packer for manipulate with imaged
 
     Args:
-        args (list): Arguments for aml_image_v2_packer tool
+        Args (list): Arguments for aml_image_v2_packer tool
 
     Returns:
         int, str, str: Return result of execute command: retcode, stdout, stderr
     """
-    cmd = [TOOL_PATH + "aml_image_v2_packer"] + args
-    return exec_cmd(cmd)
+    Cmd = [os.path.join(TOOL_PATH, "aml_image_v2_packer")] + Args
+    return ExecCmd(Cmd)
 
 
-def exec_update(args):
+def ExecUpdate(Args):
     """ Execute update for flashing device
 
     Args:
-        args (list): Arguments for update tool
+        Args (list): Arguments for update tool
 
     Returns:
         int, str, str: Return result of execute command: retcode, stdout, stderr
     """
-    cmd = [TOOL_PATH + "update"] + args
-    return exec_cmd(cmd)
+    Cmd = [TOOL_PATH + "update"] + Args
+    return ExecCmd(Cmd)
 
 
-def GetChipId(devPath):
+def GetChipId(DevPath):
     """ Get device chip ID
 
     Args:
-        devPath (str): path to connected device, for example 'Bus 001 Device 087: ID 1b8e:c003'
+        DevPath (str): path to connected device, for example 'Bus 001 Device 087: ID 1b8e:c003'
 
     Returns:
         [str | None]: chipid in hex representation, None - if can't get chip id
     """
-    chipid = None
-    log = logging.getLogger("General")
-    log.info("[{0}] Read chipID".format(devPath))
+    ChipId = None
+    Log = logging.getLogger("General")
+    Log.info("[{0}] Reading chipID...".format(DevPath))
 
     # Trying get chipid by update tool
-    retcode, out, err = exec_update(["chipid", "path-" + devPath])
-    if "ChipID is:" in out:
-        res = re.search(r'ChipID is:(\w+)', out)
-        if res:
-            chipid = res.group(1)
+    Retcode, Out, Err = ExecUpdate(["chipid", "path-" + DevPath])
+    if "ChipID is:" in Out:
+        Res = re.search(r'ChipID is:(\w+)', Out)
+        if Res:
+            ChipId = Res.group(1)
 
     # If device in u-boot then 'update chipid' return ERR
-    # Tryin to get chipid from uboot by update bulkcmd command
-    elif "romStage not bl1/bl2" in out:
-        retcode, out, err = exec_update(["bulkcmd", "path-" + devPath, "     get_chipid"])
-        res = re.search(r'bulkInReply success:(\w+)', out)
-        if res:
-            chipid = "0x" + res.group(1)
+    # Tryin to get chipid from uboot by 'update bulkcmd' command
+    elif "romStage not bl1/bl2" in Out:
+        Retcode, Out, Err = ExecUpdate(["bulkcmd", "path-" + DevPath, "     get_chipid"])
+        Res = re.search(r'bulkInReply success:(\w+)', Out)
+        if Res:
+            ChipId = "0x" + Res.group(1)
 
-    if chipid is not None:
-        log.info("[{0}]: chipID : {1}".format(devPath, chipid))
+    if ChipId is not None:
+        Log.info("[{0}] chipID: {1}".format(DevPath, ChipId))
 
-    return chipid
+    return ChipId
 
 
 class Logger:
@@ -119,93 +127,116 @@ class Logger:
                 s = "%s,%03d" % (t, record.msecs)
             return s
 
-    def __init__(self, logDir="logs/"):
-        folder = "log-" + datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+    def __init__(self, LogDir="logs/"):
+        Folder = "log-" + datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 
-        self.logDir = os.path.join(logDir, folder)
-        if not os.path.exists(self.logDir):
-            os.makedirs(self.logDir)
+        self.LogDir = os.path.join(LogDir, Folder)
+        if not os.path.exists(self.LogDir):
+            os.makedirs(self.LogDir)
 
-        self.devicesLogDir = os.path.join(self.logDir, "DevicesLog")
-        if not os.path.exists(self.devicesLogDir):
-            os.makedirs(self.devicesLogDir)
+        self.DevicesLogDir = os.path.join(self.LogDir, "DevicesLog")
+        if not os.path.exists(self.DevicesLogDir):
+            os.makedirs(self.DevicesLogDir)
 
-        self.formatter = Logger.MyFormatter(
-            fmt='%(asctime)s %(levelname)s %(message)s', datefmt='%H:%M:%S.%f')
+        self.Formatter = Logger.MyFormatter(fmt='%(asctime)s %(levelname)s %(message)s', datefmt='%H:%M:%S.%f')
 
         # Define log file for general purpose
-        fileHandlerGeneral = logging.FileHandler(self.logDir + "/General.log")
-        fileHandlerGeneral.setFormatter(self.formatter)
+        FileHandlerGeneral = logging.FileHandler(self.LogDir + "/General.log")
+        FileHandlerGeneral.setFormatter(self.Formatter)
 
-        logGeneral = logging.getLogger("General")
-        logGeneral.setLevel(logging.INFO)
-        logGeneral.addHandler(fileHandlerGeneral)
+        LogGeneral = logging.getLogger("General")
+        LogGeneral.setLevel(logging.INFO)
+        LogGeneral.addHandler(FileHandlerGeneral)
 
         # Define scenario log file
-        streamHandler = logging.StreamHandler(sys.stdout)
-        streamHandler.setFormatter(self.formatter)
-        logGeneral.addHandler(streamHandler)
+        StreamHandler = logging.StreamHandler(sys.stdout)
+        StreamHandler.setFormatter(self.Formatter)
+        LogGeneral.addHandler(StreamHandler)
 
-    def GetDeviceLog(self, chipID):
+    def GetDeviceLog(self, ChipID):
         """Get logging instance to save all logs of burning process
 
         Args:
-            chipID (str): chipid of this device
+            ChipID (str): chipid of this device
 
         Returns:
-            logging: instance of logging
+            logging: instance of device logging
         """
 
-        logName = "{0}".format(chipID)
-        logDevice = logging.getLogger(logName)
+        LogName = "{0}".format(ChipID)
+        DeviceLog = logging.getLogger(LogName)
 
-        if not logDevice.hasHandlers():
-            fileHandlerDevice = logging.FileHandler(self.devicesLogDir + "/chipid_{0}.log".format(logName))
-            fileHandlerDevice.setFormatter(self.formatter)
+        if not DeviceLog.hasHandlers():
+            fileHandlerDevice = logging.FileHandler(self.DevicesLogDir + "/chipid_{0}.log".format(LogName))
+            fileHandlerDevice.setFormatter(self.Formatter)
 
-            logDevice.setLevel(logging.INFO)
-            logDevice.addHandler(fileHandlerDevice)
+            DeviceLog.setLevel(logging.INFO)
+            DeviceLog.addHandler(fileHandlerDevice)
 
-        return logDevice
+        return DeviceLog
 
 
 class Device:
-    def __init__(self, logger, devPath, chipid):
-        self.devLock = threading.Lock()
+    def __init__(self, Logger, DevPath, ChipId):
+        self.DevLock = threading.Lock()
 
-        self.chipId = chipid
-        self.devPath = devPath
+        self.ChipId = ChipId
+        self.DevPath = DevPath
 
-        self.deviceLog = logger.GetDeviceLog(chipid)
-        self.generalLog = logging.getLogger("General")
+        self.DeviceLog = Logger.GetDeviceLog(ChipId)
+        self.GeneralLog = logging.getLogger("General")
 
-        self.waitReconnect = False
+        self.WaitReconnect = False
 
-    def WaitReconnect(self, timeout=20):
-        self.generalLog.info("{0} Wait reconnect...".format(self.GetDesciption()))
-        with self.devLock:
-            self.waitReconnect = True
+    def WaitReconnect(self, Timeout=20):
+        """ Blocking waiting device reconnection
 
-        while self.waitReconnect and timeout > 0:
-            timeout -= 1
+        Args:
+            Timeout (int, optional): timeout to wait device reconnection. Defaults to 20.
+
+        Raises:
+            RuntimeError: If device didn't reconnect in timeout time span
+        """
+        self.GeneralLog.info("{0} Wait reconnect...".format(self.GetDesciption()))
+        with self.DevLock:
+            self.WaitReconnect = True
+
+        while self.WaitReconnect is True and Timeout > 0:
+            Timeout -= 1
             time.sleep(1)
 
-        if timeout == 0:
-            raise RuntimeError("Device didn't reconnected!")
+        if Timeout == 0:
+            raise RuntimeError("{0} Device didn't reconnected!".format(self.GetDesciption()))
 
-    def DetectReconnect(self, newDevPath):
-        self.generalLog.info("{0} Reconnected: new devPath: {1}".format(self.GetDesciption(), newDevPath))
-        with self.devLock:
-            self.devPath = newDevPath
-            self.waitReconnect = False
+    def DetectReconnect(self, NewDevPath):
+        """ Detect device reconnect
 
-    def Identify(self, idx):
+        Args:
+            NewDevPath (str): new device path after reconnect
+        """
+        self.GeneralLog.info("{0} Device reconnected at: {1}".format(self.GetDesciption(), NewDevPath))
+        with self.DevLock:
+            self.DevPath = NewDevPath
+            self.WaitReconnect = False
+
+    def Identify(self, Idx):
+        """ Get device firmware version
+
+        Args:
+            Idx (int): get device firmware version element at position Idx
+
+        Raises:
+            RuntimeError: Can't get part of device firmware version
+
+        Returns:
+            str: Part of device firmware version
+        """
         retcode, out, err = self.RunUpdateReturn("identify", ["7"])
         match = re.search(r'firmware', out)
         if match is not None:
             match = re.search(r'(\d)-(\d)-(\d)-(\d)-(\d)-(\d)-(\d)', out)
-            if match and idx < 7:
-                return match.group(idx + 1)
+            if match is not None and Idx < 7:
+                return match.group(Idx + 1)
         raise RuntimeError("Can't identify device!")
 
     def GetDesciption(self):
@@ -215,39 +246,66 @@ class Device:
         desc += self.chipId + "]"
         return desc
 
-    def RunUpdateReturn(self, cmd, args=[]):
+    def RunUpdateReturn(self, Cmd, Args=[]):
+        """ Call Amlogic update tool for specify device
+
+        Args:
+            Cmd (str): name of the command
+            Args (list, optional): arguments for command. Defaults to [].
+
+        Raises:
+            RuntimeError: Wrong commnd format
+
+        Returns:
+            int, str, str: Result of command execution retcode, stdout, stderr
+        """
         # Kind of magic
-        if any(cmd in i for i in ["bulkcmd", "tplcmd"]):
-            args[0] = "     " + args[0]
+        if any(Cmd in i for i in ["bulkcmd", "tplcmd"]):
+            if len(Args) == 0:
+                raise RuntimeError("Can't execute command '{0}' without args!".format(Cmd))
+            else:
+                Args[0] = "     " + Args[0]
 
         # Execute shell command
-        execCmd = [cmd, "path-" + self.devPath] + args
-        retcode, out, err = exec_update(execCmd)
+        ExecCmd = [Cmd, "path-" + self.DevPath] + Args
+        Retcode, Out, Err = ExecUpdate(ExecCmd)
 
         # Logging command in logfile
-        self.deviceLog.info("Command: {0}".format(' '.join(execCmd)))
-        self.deviceLog.info(10 * "-" + " Response " + 10 * "-")
-        if out != "":
-            self.deviceLog.info("\n" + out)
-        if err != "":
-            self.deviceLog.error("\n" + err)
-        self.deviceLog.info(30 * "-")
+        self.DeviceLog.info("Command: update {1}".format(' '.join(ExecCmd)))
+        self.DeviceLog.info(10 * "-" + " Response " + 10 * "-")
+        if Out != "":
+            self.DeviceLog.info("\n" + Out)
+        if Err != "":
+            self.DeviceLog.error("\n" + Err)
+        self.DeviceLog.info(30 * "-")
 
-        return retcode, out, err
+        return Retcode, Out, Err
 
-    def RunUpdate(self, cmd, args=[]):
-        retcode, out, err = self.RunUpdateReturn(cmd, args)
-        match = re.match(r'ERR', out)
-        if match or retcode != 0:
-            return 1, out, err
+    def RunUpdate(self, Cmd, Args=[]):
+        Retcode, Out, Err = self.RunUpdateReturn(Cmd, Args)
+        Match = re.match(r'ERR', Out)
+        if Match is not None or Retcode != 0:
+            return 1, Out, Err
 
-        return 0, out, err
+        return 0, Out, Err
 
-    def RunUpdateAssert(self, cmd, args=[]):
-        retcode, out, err = self.RunUpdate(cmd, args)
-        if retcode != 0:
-            raise RuntimeError("Error execute: update {0} {1}".format(cmd, ' '.join(args)))
-        return retcode, out, err
+    def RunUpdateAssert(self, Cmd, Args=[]):
+        """ Call Amlogic update tool for specify device and check for error return
+
+        Args:
+            Cmd (str): name of the command
+            Args (list, optional): arguments for command. Defaults to [].
+
+        Raises:
+            RuntimeError: Command return error result
+
+        Returns:
+            int, str, str: Result of command execution retcode, stdout, stderr
+        """
+        Retcode, Out, Err = self.RunUpdate(Cmd, Args)
+        if Retcode != 0:
+            raise RuntimeError("Error execute: update {0} {1}".format(Cmd, ' '.join(Args)))
+        return Retcode, Out, Err
 
 
 class ImageConfig:
@@ -260,7 +318,7 @@ class ImageConfig:
             self.file_type = file_type
 
         def ToString(self):
-            return '; '.join(['{0}: {1}'.format(k, v) for k, v in self.__dict__.items()])
+            return ';\t'.join(['{0}: {1}'.format(k, v) for k, v in self.__dict__.items()])
 
     def __init__(self, filePath):
         self.filePath = filePath
@@ -287,7 +345,7 @@ class ImageConfig:
         return self.items.get(sub_type, None)
 
     def ToString(self):
-        return '\n'.join(['{0}: [{1}]'.format(k, v.ToString()) for k, v in self.items.items()])
+        return '\n'.join(['{0}:\t[{1}]'.format(k, v.ToString()) for k, v in self.items.items()])
 
 
 class PlatformConfig:
@@ -315,7 +373,7 @@ class PlatformConfig:
         return default
 
     def ToString(self):
-        return '\n'.join(['{0}: {1}'.format(k, v) for k, v in self.__dict__.items()])
+        return '\n'.join(['{0}:\t{1}'.format(k, v) for k, v in self.__dict__.items()])
 
 
 class Image:
@@ -335,7 +393,7 @@ class Image:
 
         # Unpacking image
         self.generalLog.info("Extract image '{0}' to '{1}'".format(imgPath, self.tmpdir))
-        retcode, out, err = exec_packer(["-d", imgPath, self.tmpdir])
+        retcode, out, err = ExecPacker(["-d", imgPath, self.tmpdir])
         if "Image unpack OK!" not in out:
             self.generalLog.error("Unpack result:\n{0}".format(out))
             raise RuntimeError("Can't unpackage image!")
@@ -345,7 +403,7 @@ class Image:
 
         # Read image config file
         imageConfigPath = os.path.join(self.tmpdir, "image.cfg")
-        check_file(imageConfigPath)
+        CheckFile(imageConfigPath)
 
         self.imageConfig = ImageConfig(imageConfigPath)
         self.generalLog.info("Image config:\n{0}".format(
@@ -356,7 +414,7 @@ class Image:
         if platformConfigFile:
             platformFilePath = os.path.join(self.tmpdir, platformConfigFile.file)
 
-            check_file(platformFilePath)
+            CheckFile(platformFilePath)
 
             self.platformConfig = PlatformConfig(platformFilePath)
             self.generalLog.info("Platform config:\n{0}".format(self.platformConfig.ToString()))
@@ -369,26 +427,26 @@ class Image:
             shutil.rmtree(self.tmpdir)
 
     def GetDDR(self, soc):
-        ddr = None
+        ddrFile = None
         if any(soc == item for item in ["gxl", "axg", "txlx"]):
-            ddr = os.path.join(TOOL_PATH, "usbbl2runpara_ddrinit.bin")
-            check_file(ddr)
-        return ddr
+            ddrFile = os.path.join(TOOL_PATH, "usbbl2runpara_ddrinit.bin")
+            CheckFile(ddrFile)
+        return ddrFile
 
     def GetFIP(self, soc):
         fip = None
         if any(soc == item for item in ["gxl", "axg", "txlx"]):
             fip = os.path.join(TOOL_PATH, "usbbl2runpara_runfipimg.bin")
-            check_file(fip)
+            CheckFile(fip)
         elif soc == "m8":
             fip = os.path.join(TOOL_PATH, "decompressPara_4M.dump")
-            check_file(fip)
+            CheckFile(fip)
         return fip
 
     def GetBootloader(self):
         if self.imageConfig.items.get("bootloader") is not None:
             bootloader_file = os.path.join(self.tmpdir, self.imageConfig.items["bootloader"].file)
-            check_file(bootloader_file)
+            CheckFile(bootloader_file)
             return bootloader_file
         else:
             self.generalLog.error("Can't find bootloader file!")
@@ -404,7 +462,7 @@ class Image:
         else:
             raise RuntimeError("Unknown soc: " + soc)
 
-        check_file(dtbfile)
+        CheckFile(dtbfile)
         return dtbfile
 
     def GetBL2(self, soc, secure):
@@ -420,17 +478,17 @@ class Image:
                 else:
                     bl2 = os.path.join(self.tmpdir, self.imageConfig.items["DDR_ENC"].file)
         else:
-            check_file(self.ubootFile)
+            CheckFile(self.ubootFile)
 
             if any(soc == item for item in ["gxl", "axg", "txlx"]):
                 bl2 = os.path.join(self.tmpdir, "uboot_file_bl2.bin")
                 if not os.path.exists(bl2):
-                    exec_cmd(["dd", "&>/dev/null", "if=" + self.ubootFile, "of=" + bl2, "bs=49152", "count=1"])
+                    ExecCmd(["dd", "&>/dev/null", "if=" + self.ubootFile, "of=" + bl2, "bs=49152", "count=1"])
             else:
                 bl2 = os.path.join(self.tmpdir, self.imageConfig.items["DDR"].file)
 
         if bl2 is not None:
-            check_file(bl2)
+            CheckFile(bl2)
 
         return bl2
 
@@ -450,17 +508,17 @@ class Image:
                 else:
                     tpl = os.path.join(self.tmpdir, self.imageConfig.items["UBOOT_ENC"].file)
         else:
-            check_file(self.ubootFile)
+            CheckFile(self.ubootFile)
 
             if any(soc == item for item in ["gxl", "axg", "txlx"]):
                 tpl = os.path.join(self.tmpdir, "uboot_file_tpl.bin")
                 if not os.path.exists(tpl):
-                    exec_cmd(["dd", "&>/dev/null", "if=" + self.ubootFile, "of=" + tpl, "bs=49152", "skip=1"])
+                    ExecCmd(["dd", "&>/dev/null", "if=" + self.ubootFile, "of=" + tpl, "bs=49152", "skip=1"])
             else:
                 tpl = self.ubootFile
 
         if tpl is not None:
-            check_file(tpl)
+            CheckFile(tpl)
 
         return tpl
 
@@ -536,7 +594,7 @@ class Burner(threading.Thread):
             self.GeneralLog("Programming efuses...")
             self.GeneralLog("Efuse file: " + self.efuseFile)
 
-            check_file(self.efuseFile)
+            CheckFile(self.efuseFile)
 
             self.GeneralLog("Debug out to don't secureboot device", logging.WARNING)
             # self.device.RunUpdateAssert("write", [self.efuseFile, "0x03000000"])
@@ -570,7 +628,7 @@ class Burner(threading.Thread):
 
                 partition_file = os.path.join(self.img.tmpdir, file)
 
-                check_file(partition_file)
+                CheckFile(partition_file)
 
                 if partition.sub_type == "_aml_dtb":
                     self.GeneralLog("Write dtb partition")
@@ -613,7 +671,7 @@ class Burner(threading.Thread):
                 raise RuntimeError("Can't find meson1 file!")
 
             mesonFilePath = os.path.join(self.img.tmpdir, mesonItem.file)
-            check_file(mesonFilePath)
+            CheckFile(mesonFilePath)
 
             self.device.RunUpdateAssert("mwrite", [mesonFilePath, "mem", "dtb", "normal"])
 
@@ -851,53 +909,52 @@ def ParseArgs():
 
 
 def sigint_handler(sig, frame):
-    global mainLoopFlag
+    global MainLoopFlag
     logging.getLogger("General").warning("Unexpected program termination: Ctrl+C")
-    mainLoopFlag = False
+    MainLoopFlag = False
 
 
 if __name__ == "__main__":
-    logger = Logger()
-    generalLog = logging.getLogger("General")
+    Logger = Logger()
+    GeneralLog = logging.getLogger("General")
 
     signal.signal(signal.SIGINT, sigint_handler)
 
     try:
-        args = ParseArgs()
-        img = Image(args.img)
+        Args = ParseArgs()
+        Img = Image(Args.img)
+        GeneralLog.info("Waitnig device connect...")
 
-        burners = {}
-        prevDevPathes = []
+        Burners = {}
+        PrevDevPathes = []
+        RegexpDevice = re.compile(r'Bus \d+ Device \d+: ID \w+:\w+', re.MULTILINE)
 
-        regexp_device = re.compile(r'Bus \d+ Device \d+: ID \w+:\w+', re.MULTILINE)
+        while MainLoopFlag:
 
-        while mainLoopFlag:
+            for ChipId in list(Burners.keys()):
+                if not Burners[ChipId].is_alive():
+                    Burners.pop(ChipId)
 
-            retcode, out, err = exec_update(["scan"])
+            DevPathes = []
+            Retcode, Out, Err = ExecUpdate(["scan"])
 
-            for chipid in list(burners.keys()):
-                if not burners[chipid].is_alive():
-                    burners.pop(chipid)
-
-            devPathes = []
-
-            for match in regexp_device.finditer(out):
-                devPath = match.group(0)
-                if devPath not in prevDevPathes:
-                    generalLog.info("New device: " + devPath)
-                    chipid = GetChipId(devPath)
-                    if chipid is not None:
-                        if chipid not in burners:
-                            # New device, start burning it if program not wait finish
-                            burners[chipid] = Burner(img, Device(logger, devPath, chipid), args)
+            for Match in RegexpDevice.finditer(Out):
+                DevPath = Match.group(0)
+                if DevPath not in PrevDevPathes:
+                    ChipId = GetChipId(DevPath)
+                    if ChipId is not None:
+                        if ChipId not in Burners:
+                            # New device, start burning it
+                            GeneralLog.info("New device: " + DevPath)
+                            Burners[ChipId] = Burner(Img, Device(Logger, DevPath, ChipId), Args)
                         else:
                             # Burner waits reconnect of the device
-                            burners[chipid].device.DetectReconnect(devPath)
-                devPathes.append(devPath)
-            prevDevPathes = devPathes
+                            Burners[ChipId].device.DetectReconnect(DevPath)
+                DevPathes.append(DevPath)
+            PrevDevPathes = DevPathes
             time.sleep(1)
 
-        img.Cleanup()
+        Img.Cleanup()
 
-    except RuntimeError as exc:
-        generalLog.error("Unexpected exception: {0}".format(exc))
+    except RuntimeError as Exc:
+        GeneralLog.error("Unexpected exception: {0}".format(Exc))
