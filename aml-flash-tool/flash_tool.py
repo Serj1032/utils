@@ -186,7 +186,7 @@ class Device:
         self.DeviceLog = Logger.GetDeviceLog(ChipId)
         self.GeneralLog = logging.getLogger("General")
 
-        self.WaitReconnect = False
+        self.IsWaitReconnect = False
 
     def WaitReconnect(self, Timeout=20):
         """ Blocking waiting device reconnection
@@ -199,9 +199,9 @@ class Device:
         """
         self.GeneralLog.info("{0} Wait reconnect...".format(self.GetDesciption()))
         with self.DevLock:
-            self.WaitReconnect = True
+            self.IsWaitReconnect = True
 
-        while self.WaitReconnect is True and Timeout > 0:
+        while self.IsWaitReconnect is True and Timeout > 0:
             Timeout -= 1
             time.sleep(1)
 
@@ -217,7 +217,7 @@ class Device:
         self.GeneralLog.info("{0} Device reconnected at: {1}".format(self.GetDesciption(), NewDevPath))
         with self.DevLock:
             self.DevPath = NewDevPath
-            self.WaitReconnect = False
+            self.IsWaitReconnect = False
 
     def Identify(self, Idx):
         """ Get device firmware version
@@ -240,11 +240,11 @@ class Device:
         raise RuntimeError("Can't identify device!")
 
     def GetDesciption(self):
-        desc = "["
-        if self.devPath:
-            desc += self.devPath + " "
-        desc += self.chipId + "]"
-        return desc
+        Desc = "["
+        if self.DevPath is not None:
+            Desc += self.DevPath + " "
+        Desc += self.ChipId + "]"
+        return Desc
 
     def RunUpdateReturn(self, Cmd, Args=[]):
         """ Call Amlogic update tool for specify device
@@ -271,7 +271,7 @@ class Device:
         Retcode, Out, Err = ExecUpdate(ExecCmd)
 
         # Logging command in logfile
-        self.DeviceLog.info("Command: update {1}".format(' '.join(ExecCmd)))
+        self.DeviceLog.info("Command: update {0}".format(' '.join(ExecCmd)))
         self.DeviceLog.info(10 * "-" + " Response " + 10 * "-")
         if Out != "":
             self.DeviceLog.info("\n" + Out)
@@ -552,7 +552,7 @@ class Burner(threading.Thread):
         self.DeviceLog(msg, level)
 
     def DeviceLog(self, msg, level=logging.INFO):
-        self.device.deviceLog.log(level, "%s", msg)
+        self.device.DeviceLog.log(level, "%s", msg)
 
     def run(self):
         self.GeneralLog("Start burning")
